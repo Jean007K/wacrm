@@ -50,6 +50,7 @@ interface TemplateFormData {
   language: string;
   body_text: string;
   header_type: string;
+  header_content: string;
   footer_text: string;
 }
 
@@ -64,6 +65,7 @@ const emptyForm: TemplateFormData = {
   language: 'en_US',
   body_text: '',
   header_type: '',
+  header_content: '',
   footer_text: '',
 };
 
@@ -140,6 +142,10 @@ export function TemplateManager() {
       toast.error('Body text is required');
       return;
     }
+    if (form.header_type === 'text' && !form.header_content.trim()) {
+      toast.error('Header text is required when header type is text');
+      return;
+    }
 
     try {
       setSaving(true);
@@ -153,7 +159,12 @@ export function TemplateManager() {
         category: form.category,
         language: form.language.trim() || 'en_US',
         body_text: form.body_text.trim(),
-        header_type: form.header_type || null,
+        header_type:
+          !form.header_type || form.header_type === 'none'
+            ? null
+            : form.header_type,
+        header_content:
+          form.header_type === 'text' ? form.header_content.trim() : null,
         footer_text: form.footer_text.trim() || null,
       };
 
@@ -162,7 +173,15 @@ export function TemplateManager() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: { error?: string; template?: { status?: string } } = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error(
+          `Server returned non-JSON response (HTTP ${res.status}). Check deployment logs.`,
+        );
+      }
       if (!res.ok) {
         throw new Error(data?.error || `Create failed (HTTP ${res.status})`);
       }
@@ -409,7 +428,13 @@ export function TemplateManager() {
               <Label className="text-slate-300">Header Type</Label>
               <Select
                 value={form.header_type}
-                onValueChange={(val) => setForm({ ...form, header_type: val || '' })}
+                onValueChange={(val) =>
+                  setForm({
+                    ...form,
+                    header_type: val || '',
+                    header_content: val === 'text' ? form.header_content : '',
+                  })
+                }
               >
                 <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-white">
                   <SelectValue placeholder="None" />
@@ -426,6 +451,20 @@ export function TemplateManager() {
                 </SelectContent>
               </Select>
             </div>
+
+            {form.header_type === 'text' && (
+              <div className="space-y-2">
+                <Label className="text-slate-300">Header Text</Label>
+                <Input
+                  placeholder="Short header text (max 60 chars)"
+                  value={form.header_content}
+                  onChange={(e) =>
+                    setForm({ ...form, header_content: e.target.value })
+                  }
+                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
+                />
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label className="text-slate-300">Body Text</Label>

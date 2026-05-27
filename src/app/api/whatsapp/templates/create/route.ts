@@ -14,6 +14,7 @@ interface CreateTemplateBody {
   body_text?: string
   footer_text?: string | null
   header_type?: string | null
+  header_content?: string | null
 }
 
 function toMetaCategory(
@@ -65,7 +66,9 @@ export async function POST(request: Request) {
     const language = body.language?.trim() || 'en_US'
     const bodyText = body.body_text?.trim()
     const footerText = body.footer_text?.trim() || null
-    const headerType = body.header_type?.trim() || null
+    const headerTypeRaw = body.header_type?.trim() || null
+    const headerType = headerTypeRaw === 'none' ? null : headerTypeRaw
+    const headerContent = body.header_content?.trim() || null
 
     if (!name) {
       return NextResponse.json(
@@ -80,14 +83,20 @@ export async function POST(request: Request) {
       )
     }
 
-    // The current UI has no way to provide header content/examples.
-    // Fail fast instead of creating a broken template payload in Meta.
-    if (headerType && headerType !== 'none') {
+    // This form currently supports only TEXT headers. Media headers require
+    // additional sample data / media handles that are not captured here.
+    if (headerType && headerType !== 'text') {
       return NextResponse.json(
         {
           error:
-            'Header templates are not supported from this form yet. Create this one in Meta Manager or remove the header type.',
+            'Only text headers are supported from this form right now. For image/video/document headers, create the template in Meta Manager.',
         },
+        { status: 400 }
+      )
+    }
+    if (headerType === 'text' && !headerContent) {
+      return NextResponse.json(
+        { error: 'Header text is required when header type is text.' },
         { status: 400 }
       )
     }
@@ -123,6 +132,9 @@ export async function POST(request: Request) {
       category: toMetaCategory(body.category),
       language,
       components: [
+        ...(headerType === 'text'
+          ? [{ type: 'HEADER', format: 'TEXT', text: headerContent }]
+          : []),
         { type: 'BODY', text: bodyText },
         ...(footerText ? [{ type: 'FOOTER', text: footerText }] : []),
       ],
@@ -167,8 +179,8 @@ export async function POST(request: Request) {
       category: body.category || 'Marketing',
       language,
       body_text: bodyText,
-      header_type: null,
-      header_content: null,
+      header_type: headerType,
+      header_content: headerType === 'text' ? headerContent : null,
       footer_text: footerText,
       status,
       updated_at: new Date().toISOString(),
