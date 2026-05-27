@@ -45,6 +45,7 @@ const statusColors: Record<string, string> = {
 };
 
 interface TemplateFormData {
+  template_type: 'standard' | 'call_permission_request';
   name: string;
   category: MessageTemplate['category'];
   language: string;
@@ -60,6 +61,7 @@ interface TemplateFormData {
 // translation"). Default to en_US to match the DB default on
 // message_templates.language and the broadcasts sender's fallback.
 const emptyForm: TemplateFormData = {
+  template_type: 'standard',
   name: '',
   category: 'Marketing',
   language: 'en_US',
@@ -142,6 +144,15 @@ export function TemplateManager() {
       toast.error('Body text is required');
       return;
     }
+    if (
+      form.template_type === 'call_permission_request' &&
+      form.category === 'Authentication'
+    ) {
+      toast.error(
+        'Call permission request templates only allow Marketing or Utility categories',
+      );
+      return;
+    }
     if (form.header_type === 'text' && !form.header_content.trim()) {
       toast.error('Header text is required when header type is text');
       return;
@@ -155,6 +166,7 @@ export function TemplateManager() {
       }
 
       const payload = {
+        template_type: form.template_type,
         name: form.name.trim(),
         category: form.category,
         language: form.language.trim() || 'en_US',
@@ -371,6 +383,48 @@ export function TemplateManager() {
 
           <div className="space-y-4 py-2">
             <div className="space-y-2">
+              <Label className="text-slate-300">Template Type</Label>
+              <Select
+                value={form.template_type}
+                onValueChange={(val) =>
+                  setForm({
+                    ...form,
+                    template_type: val as TemplateFormData['template_type'],
+                    // Keep call-permission templates minimal/compatible.
+                    header_type: '',
+                    header_content: '',
+                    footer_text:
+                      val === 'call_permission_request' ? '' : form.footer_text,
+                  })
+                }
+              >
+                <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-700">
+                  <SelectItem
+                    value="standard"
+                    className="text-white focus:bg-slate-700 focus:text-white"
+                  >
+                    Standard
+                  </SelectItem>
+                  <SelectItem
+                    value="call_permission_request"
+                    className="text-white focus:bg-slate-700 focus:text-white"
+                  >
+                    Call Permission Request
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              {form.template_type === 'call_permission_request' && (
+                <p className="text-[11px] text-slate-500">
+                  Uses Meta&apos;s special component{' '}
+                  <code>call_permission_request</code> and named parameters.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
               <Label className="text-slate-300">Template Name</Label>
               <Input
                 placeholder="e.g. order_confirmation"
@@ -424,7 +478,8 @@ export function TemplateManager() {
               </div>
             </div>
 
-            <div className="space-y-2">
+            {form.template_type === 'standard' && (
+              <div className="space-y-2">
               <Label className="text-slate-300">Header Type</Label>
               <Select
                 value={form.header_type}
@@ -450,9 +505,10 @@ export function TemplateManager() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+              </div>
+            )}
 
-            {form.header_type === 'text' && (
+            {form.template_type === 'standard' && form.header_type === 'text' && (
               <div className="space-y-2">
                 <Label className="text-slate-300">Header Text</Label>
                 <Input
@@ -477,7 +533,8 @@ export function TemplateManager() {
               />
             </div>
 
-            <div className="space-y-2">
+            {form.template_type === 'standard' && (
+              <div className="space-y-2">
               <Label className="text-slate-300">Footer Text</Label>
               <Input
                 placeholder="Optional footer text"
@@ -485,7 +542,8 @@ export function TemplateManager() {
                 onChange={(e) => setForm({ ...form, footer_text: e.target.value })}
                 className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
               />
-            </div>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="bg-slate-900 border-slate-700">

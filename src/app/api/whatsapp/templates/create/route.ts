@@ -8,6 +8,7 @@ const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
 type TemplateCategory = 'Marketing' | 'Utility' | 'Authentication'
 
 interface CreateTemplateBody {
+  template_type?: 'standard' | 'call_permission_request'
   name?: string
   category?: TemplateCategory
   language?: string
@@ -16,6 +17,8 @@ interface CreateTemplateBody {
   header_type?: string | null
   header_content?: string | null
 }
+
+type ParameterFormat = 'named' | 'positional'
 
 function toMetaCategory(
   category: TemplateCategory | undefined
@@ -49,6 +52,28 @@ function normalizeStatus(
   }
 }
 
+function extractNamedParams(text: string): string[] {
+  const matches = text.match(/\{\{([a-z_][a-z0-9_]*)\}\}/g) ?? []
+  return Array.from(
+    new Set(
+      matches
+        .map((m) => m.replace('{{', '').replace('}}', ''))
+        .filter(Boolean)
+    )
+  )
+}
+
+function extractPositionalParams(text: string): number[] {
+  const matches = text.match(/\{\{([1-9][0-9]*)\}\}/g) ?? []
+  return Array.from(
+    new Set(
+      matches
+        .map((m) => Number(m.replace('{{', '').replace('}}')))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    )
+  ).sort((a, b) => a - b)
+}
+
 export async function POST(request: Request) {
   try {
     const supabase = await createClient()
@@ -63,6 +88,7 @@ export async function POST(request: Request) {
 
     const body = (await request.json()) as CreateTemplateBody
     const name = body.name?.trim()
+    const templateType = body.template_type || 'standard'
     const language = body.language?.trim() || 'en_US'
     const bodyText = body.body_text?.trim()
     const footerText = body.footer_text?.trim() || null
@@ -100,6 +126,26 @@ export async function POST(request: Request) {
         { status: 400 }
       )
     }
+    if (templateType === 'call_permission_request') {
+      if (body.category === 'Authentication') {
+        return NextResponse.json(
+          {
+            error:
+              'Call permission request templates only support MARKETING or UTILITY categories.',
+          },
+          { status: 400 }
+        )
+      }
+      if (headerType || footerText) {
+        return NextResponse.json(
+          {
+            error:
+              'Call permission request templates cannot include header/footer from this form.',
+          },
+          { status: 400 }
+        )
+      }
+    }
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
@@ -127,17 +173,99 @@ export async function POST(request: Request) {
     }
 
     const accessToken = decrypt(config.access_token)
-    const payload = {
+    const namedParams = extractNamedParams(bodyText)
+    const positionalParams = extractPositionalParams(bodyText)
+    if (namedParams.length > 0 && positionalParams.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            'Template body cannot mix named and positional variables. Use either {{name}} or {{1}} format, not both.',
+        },
+        { status: 400 }
+      )
+    }
+
+    let parameterFormat: ParameterFormat | null = null
+    if (namedParams.length > 0) parameterFormat = 'named'
+    if (positionalParams.length > 0) parameterFormat = 'positional'
+
+    const bodyComponent: {
+      type: 'BODY'
+      text: string
+      example?:
+        | {
+            body_text_named_params: Array<{
+              param_name: string
+              example: string
+            }>
+          }
+        | {
+            body_text: string[][]
+          }
+    } = { type: 'BODY', text: bodyText }
+
+    if (parameterFormat === 'named') {
+      bodyComponent.example = {
+        body_text_named_params: namedParams.map((p) => ({
+          param_name: p,
+          example: p === 'first_name' ? 'Pablo' : `example_${p}`,
+        })),
+      }
+    } else if (parameterFormat === 'positional') {
+      if (templateType === 'call_permission_request') {
+        return NextResponse.json(
+          {
+            error:
+              'Call permission request templates require named parameters (e.g. {{first_name}}), not positional {{1}}.',
+          },
+          { status: 400 }
+        )
+      }
+      bodyComponent.example = {
+        body_text: [
+          positionalParams.map((idx) =>
+            idx === 1 ? 'Pablo' : `example_${idx}`
+          ),
+        ],
+      }
+    }
+
+    const payload: {
+      name: string
+      category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
+      language: string
+      parameter_format?: ParameterFormat
+      components: Array<
+        | { type: 'header'; format: 'TEXT'; text: string }
+        | { type: 'body'; text: string; example?: typeof bodyComponent.example }
+        | { type: 'footer'; text: string }
+        | { type: 'call_permission_request' }
+      >
+    } = {
       name,
       category: toMetaCategory(body.category),
       language,
       components: [
-        ...(headerType === 'text'
-          ? [{ type: 'HEADER', format: 'TEXT', text: headerContent }]
+        ...(templateType === 'standard' && headerType === 'text'
+          ? [{ type: 'header', format: 'TEXT', text: headerContent }]
           : []),
-        { type: 'BODY', text: bodyText },
-        ...(footerText ? [{ type: 'FOOTER', text: footerText }] : []),
+        {
+          type: 'body',
+          text: bodyComponent.text,
+          ...(bodyComponent.example ? { example: bodyComponent.example } : {}),
+        },
+        ...(templateType === 'call_permission_request'
+          ? [{ type: 'call_permission_request' as const }]
+          : []),
+        ...(templateType === 'standard' && footerText
+          ? [{ type: 'footer' as const, text: footerText }]
+          : []),
       ],
+    }
+    if (templateType === 'call_permission_request') {
+      payload.parameter_format = 'named'
+    } else if (parameterFormat) {
+      payload.parameter_format = parameterFormat
     }
 
     const metaRes = await fetch(
