@@ -149,29 +149,33 @@ export function TemplateManager() {
       }
 
       const payload = {
-        user_id: user.id,
         name: form.name.trim(),
         category: form.category,
         language: form.language.trim() || 'en_US',
         body_text: form.body_text.trim(),
         header_type: form.header_type || null,
         footer_text: form.footer_text.trim() || null,
-        status: 'Draft' as const,
       };
 
-      const { error } = await supabase
-        .from('message_templates')
-        .insert(payload);
+      const res = await fetch('/api/whatsapp/templates/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `Create failed (HTTP ${res.status})`);
+      }
 
-      if (error) throw error;
-
-      toast.success('Template created successfully');
+      toast.success(
+        `Template created in Meta (${data?.template?.status || 'Pending'})`,
+      );
       setDialogOpen(false);
       setForm(emptyForm);
       if (user) await fetchTemplates(user.id);
     } catch (err) {
       console.error('Save error:', err);
-      toast.error('Failed to create template');
+      toast.error(err instanceof Error ? err.message : 'Failed to create template');
     } finally {
       setSaving(false);
     }
