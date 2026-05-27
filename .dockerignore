@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+.git
+.env
+.env.*
+!.env.local.example
+npm-debug.log*
+.agents
+skills-lock.json
+supabase/.temp
