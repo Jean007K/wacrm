@@ -68,7 +68,7 @@ function extractPositionalParams(text: string): number[] {
   return Array.from(
     new Set(
       matches
-        .map((m) => Number(m.replace('{{', '').replace('}}')))
+        .map((m) => Number(m.replace('{{', '').replace('}}', '')))
         .filter((n) => Number.isInteger(n) && n > 0)
     )
   ).sort((a, b) => a - b)
@@ -230,37 +230,42 @@ export async function POST(request: Request) {
       }
     }
 
+    const components: Array<
+      | { type: 'header'; format: 'TEXT'; text: string }
+      | { type: 'body'; text: string; example?: typeof bodyComponent.example }
+      | { type: 'footer'; text: string }
+      | { type: 'call_permission_request' }
+    > = []
+
+    if (templateType === 'standard' && headerType === 'text' && headerContent) {
+      components.push({ type: 'header', format: 'TEXT', text: headerContent })
+    }
+
+    components.push({
+      type: 'body',
+      text: bodyComponent.text,
+      ...(bodyComponent.example ? { example: bodyComponent.example } : {}),
+    })
+
+    if (templateType === 'call_permission_request') {
+      components.push({ type: 'call_permission_request' })
+    }
+
+    if (templateType === 'standard' && footerText) {
+      components.push({ type: 'footer', text: footerText })
+    }
+
     const payload: {
       name: string
       category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
       language: string
       parameter_format?: ParameterFormat
-      components: Array<
-        | { type: 'header'; format: 'TEXT'; text: string }
-        | { type: 'body'; text: string; example?: typeof bodyComponent.example }
-        | { type: 'footer'; text: string }
-        | { type: 'call_permission_request' }
-      >
+      components: typeof components
     } = {
       name,
       category: toMetaCategory(body.category),
       language,
-      components: [
-        ...(templateType === 'standard' && headerType === 'text'
-          ? [{ type: 'header', format: 'TEXT', text: headerContent }]
-          : []),
-        {
-          type: 'body',
-          text: bodyComponent.text,
-          ...(bodyComponent.example ? { example: bodyComponent.example } : {}),
-        },
-        ...(templateType === 'call_permission_request'
-          ? [{ type: 'call_permission_request' as const }]
-          : []),
-        ...(templateType === 'standard' && footerText
-          ? [{ type: 'footer' as const, text: footerText }]
-          : []),
-      ],
+      components,
     }
     if (templateType === 'call_permission_request') {
       payload.parameter_format = 'named'
