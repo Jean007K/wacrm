@@ -63,25 +63,24 @@ interface TemplateFormData {
 const emptyForm: TemplateFormData = {
   name: '',
   category: 'Marketing',
-  language: 'en_US',
+  language: 'es',
   body_text: '',
   header_type: '',
   header_content: '',
   footer_text: '',
 };
 
-const COMMON_LANGUAGE_CODES = [
-  'en_US',
-  'en_GB',
-  'es',
-  'es_ES',
-  'es_MX',
-  'fr',
-  'de',
-  'it',
-  'pt_BR',
-  'pt_PT',
-];
+/** Códigos exactos de Meta — el valor enviado debe coincidir con lo aprobado en Meta. */
+const TEMPLATE_LANGUAGES = [
+  { code: 'es', label: 'Español' },
+  { code: 'es_MX', label: 'Español (México)' },
+  { code: 'es_ES', label: 'Español (España)' },
+  { code: 'es_AR', label: 'Español (Argentina)' },
+  { code: 'es_CO', label: 'Español (Colombia)' },
+  { code: 'es_CL', label: 'Español (Chile)' },
+  { code: 'en_US', label: 'English (US)' },
+  { code: 'en_GB', label: 'English (UK)' },
+] as const;
 
 export function TemplateManager() {
   const supabase = createClient();
@@ -149,7 +148,7 @@ export function TemplateManager() {
       const payload = {
         name: form.name.trim(),
         category: form.category,
-        language: form.language.trim() || 'en_US',
+        language: form.language.trim() || 'es',
         body_text: isAuth ? '' : form.body_text.trim(),
         header_type:
           isAuth || !form.header_type || form.header_type === 'none'
@@ -424,18 +423,35 @@ export function TemplateManager() {
 
               <div className="space-y-2">
                 <Label className="text-slate-300">Idioma</Label>
-                <Input
-                  list="template-language-codes"
-                  placeholder="es_MX"
-                  value={form.language}
-                  onChange={(e) => setForm({ ...form, language: e.target.value })}
-                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
-                />
-                <datalist id="template-language-codes">
-                  {COMMON_LANGUAGE_CODES.map((code) => (
-                    <option key={code} value={code} />
-                  ))}
-                </datalist>
+                <Select
+                  value={
+                    TEMPLATE_LANGUAGES.some((l) => l.code === form.language)
+                      ? form.language
+                      : 'es'
+                  }
+                  onValueChange={(val) =>
+                    setForm({ ...form, language: val ?? 'es' })
+                  }
+                >
+                  <SelectTrigger className="w-full bg-slate-800 border-slate-700 text-white">
+                    <SelectValue placeholder="Español" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-700">
+                    {TEMPLATE_LANGUAGES.map((lang) => (
+                      <SelectItem
+                        key={lang.code}
+                        value={lang.code}
+                        className="text-white focus:bg-slate-700 focus:text-white"
+                      >
+                        {lang.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-slate-500">
+                  Debe coincidir con el idioma en Meta (ej.{' '}
+                  <code>es</code> y <code>es_MX</code> son distintos).
+                </p>
               </div>
             </div>
 

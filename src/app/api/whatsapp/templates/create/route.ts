@@ -155,7 +155,7 @@ export async function POST(request: Request) {
     const name = normalizeTemplateName(body.name || '')
     const category = body.category || 'Marketing'
     const metaCategory = toMetaCategory(category)
-    const language = body.language?.trim() || 'en_US'
+    const language = body.language?.trim() || 'es'
     const bodyText = body.body_text?.trim() || ''
     const footerText = body.footer_text?.trim() || null
     const headerTypeRaw = body.header_type?.trim() || null
