@@ -8,7 +8,6 @@ const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`
 type TemplateCategory = 'Marketing' | 'Utility' | 'Authentication'
 
 interface CreateTemplateBody {
-  template_type?: 'standard' | 'call_permission_request'
   name?: string
   category?: TemplateCategory
   language?: string
@@ -17,8 +16,6 @@ interface CreateTemplateBody {
   header_type?: string | null
   header_content?: string | null
 }
-
-type ParameterFormat = 'named' | 'positional'
 
 function toMetaCategory(
   category: TemplateCategory | undefined
@@ -52,15 +49,13 @@ function normalizeStatus(
   }
 }
 
-function extractNamedParams(text: string): string[] {
-  const matches = text.match(/\{\{([a-z_][a-z0-9_]*)\}\}/g) ?? []
-  return Array.from(
-    new Set(
-      matches
-        .map((m) => m.replace('{{', '').replace('}}', ''))
-        .filter(Boolean)
-    )
-  )
+/** Meta template names: lowercase letters, numbers, underscores only. */
+function normalizeTemplateName(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
 }
 
 function extractPositionalParams(text: string): number[] {
@@ -72,6 +67,76 @@ function extractPositionalParams(text: string): number[] {
         .filter((n) => Number.isInteger(n) && n > 0)
     )
   ).sort((a, b) => a - b)
+}
+
+type MetaComponent =
+  | { type: 'HEADER'; format: 'TEXT'; text: string; example?: { header_text: string[] } }
+  | {
+      type: 'BODY'
+      text?: string
+      add_security_recommendation?: boolean
+      example?: { body_text: string[][] }
+    }
+  | { type: 'FOOTER'; text: string }
+  | {
+      type: 'BUTTONS'
+      buttons: Array<{ type: 'OTP'; otp_type: 'COPY_CODE' | 'ONE_TAP' }>
+    }
+
+function buildMarketingUtilityComponents(
+  bodyText: string,
+  footerText: string | null,
+  headerType: string | null,
+  headerContent: string | null
+): MetaComponent[] {
+  const components: MetaComponent[] = []
+
+  if (headerType === 'text' && headerContent) {
+    const header: MetaComponent = {
+      type: 'HEADER',
+      format: 'TEXT',
+      text: headerContent,
+    }
+    const headerVars = extractPositionalParams(headerContent)
+    if (headerVars.length > 0) {
+      header.example = {
+        header_text: headerVars.map((i) => (i === 1 ? 'Ejemplo' : `valor_${i}`)),
+      }
+    }
+    components.push(header)
+  }
+
+  const body: MetaComponent = { type: 'BODY', text: bodyText }
+  const bodyVars = extractPositionalParams(bodyText)
+  if (bodyVars.length > 0) {
+    body.example = {
+      body_text: [
+        bodyVars.map((i) => (i === 1 ? 'Juan' : i === 2 ? 'Producto' : `valor_${i}`)),
+      ],
+    }
+  }
+  components.push(body)
+
+  if (footerText) {
+    components.push({ type: 'FOOTER', text: footerText })
+  }
+
+  return components
+}
+
+/** Meta AUTHENTICATION templates: OTP copy-code (verification codes). */
+function buildAuthenticationComponents(footerText: string | null): MetaComponent[] {
+  const components: MetaComponent[] = [
+    { type: 'BODY', add_security_recommendation: true },
+  ]
+  if (footerText) {
+    components.push({ type: 'FOOTER', text: footerText })
+  }
+  components.push({
+    type: 'BUTTONS',
+    buttons: [{ type: 'OTP', otp_type: 'COPY_CODE' }],
+  })
+  return components
 }
 
 export async function POST(request: Request) {
@@ -87,10 +152,11 @@ export async function POST(request: Request) {
     }
 
     const body = (await request.json()) as CreateTemplateBody
-    const name = body.name?.trim()
-    const templateType = body.template_type || 'standard'
+    const name = normalizeTemplateName(body.name || '')
+    const category = body.category || 'Marketing'
+    const metaCategory = toMetaCategory(category)
     const language = body.language?.trim() || 'en_US'
-    const bodyText = body.body_text?.trim()
+    const bodyText = body.body_text?.trim() || ''
     const footerText = body.footer_text?.trim() || null
     const headerTypeRaw = body.header_type?.trim() || null
     const headerType = headerTypeRaw === 'none' ? null : headerTypeRaw
@@ -98,53 +164,46 @@ export async function POST(request: Request) {
 
     if (!name) {
       return NextResponse.json(
-        { error: 'Template name is required' },
-        { status: 400 }
-      )
-    }
-    if (!bodyText) {
-      return NextResponse.json(
-        { error: 'Body text is required' },
-        { status: 400 }
-      )
-    }
-
-    // This form currently supports only TEXT headers. Media headers require
-    // additional sample data / media handles that are not captured here.
-    if (headerType && headerType !== 'text') {
-      return NextResponse.json(
         {
           error:
-            'Only text headers are supported from this form right now. For image/video/document headers, create the template in Meta Manager.',
+            'Nombre inválido. Usa solo letras minúsculas, números y guiones bajos (ej: confirmacion_pedido).',
         },
         { status: 400 }
       )
     }
-    if (headerType === 'text' && !headerContent) {
+
+    if (metaCategory !== 'AUTHENTICATION' && !bodyText) {
       return NextResponse.json(
-        { error: 'Header text is required when header type is text.' },
+        { error: 'El texto del cuerpo es obligatorio.' },
         { status: 400 }
       )
     }
-    if (templateType === 'call_permission_request') {
-      if (body.category === 'Authentication') {
-        return NextResponse.json(
-          {
-            error:
-              'Call permission request templates only support MARKETING or UTILITY categories.',
-          },
-          { status: 400 }
-        )
-      }
-      if (headerType || footerText) {
-        return NextResponse.json(
-          {
-            error:
-              'Call permission request templates cannot include header/footer from this form.',
-          },
-          { status: 400 }
-        )
-      }
+
+    if (headerType && headerType !== 'text') {
+      return NextResponse.json(
+        {
+          error:
+            'Solo se admite encabezado de texto aquí. Para imagen/video/documento, créala en Meta Business Suite.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (headerType === 'text' && !headerContent) {
+      return NextResponse.json(
+        { error: 'Escribe el texto del encabezado o elige "Sin encabezado".' },
+        { status: 400 }
+      )
+    }
+
+    if (metaCategory === 'AUTHENTICATION' && (headerType || headerContent)) {
+      return NextResponse.json(
+        {
+          error:
+            'Las plantillas de autenticación (código OTP) no llevan encabezado. Meta las genera automáticamente.',
+        },
+        { status: 400 }
+      )
     }
 
     const { data: config, error: configError } = await supabase
@@ -157,7 +216,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            'WhatsApp not configured. Connect your WhatsApp account in Settings first.',
+            'WhatsApp no está configurado. Conéctalo primero en Ajustes → WhatsApp.',
         },
         { status: 400 }
       )
@@ -165,112 +224,37 @@ export async function POST(request: Request) {
     if (!config.waba_id) {
       return NextResponse.json(
         {
-          error:
-            'WABA ID missing. Re-connect your WhatsApp account in Settings.',
+          error: 'Falta el WABA ID. Vuelve a conectar WhatsApp en Ajustes.',
         },
         { status: 400 }
       )
     }
 
-    const accessToken = decrypt(config.access_token)
-    const namedParams = extractNamedParams(bodyText)
-    const positionalParams = extractPositionalParams(bodyText)
-    if (namedParams.length > 0 && positionalParams.length > 0) {
+    let accessToken: string
+    try {
+      accessToken = decrypt(config.access_token)
+    } catch {
       return NextResponse.json(
-        {
-          error:
-            'Template body cannot mix named and positional variables. Use either {{name}} or {{1}} format, not both.',
-        },
+        { error: 'Token de WhatsApp inválido. Reconecta tu cuenta en Ajustes.' },
         { status: 400 }
       )
     }
 
-    let parameterFormat: ParameterFormat | null = null
-    if (namedParams.length > 0) parameterFormat = 'named'
-    if (positionalParams.length > 0) parameterFormat = 'positional'
+    const components =
+      metaCategory === 'AUTHENTICATION'
+        ? buildAuthenticationComponents(footerText)
+        : buildMarketingUtilityComponents(
+            bodyText,
+            footerText,
+            headerType,
+            headerContent
+          )
 
-    const bodyComponent: {
-      type: 'BODY'
-      text: string
-      example?:
-        | {
-            body_text_named_params: Array<{
-              param_name: string
-              example: string
-            }>
-          }
-        | {
-            body_text: string[][]
-          }
-    } = { type: 'BODY', text: bodyText }
-
-    if (parameterFormat === 'named') {
-      bodyComponent.example = {
-        body_text_named_params: namedParams.map((p) => ({
-          param_name: p,
-          example: p === 'first_name' ? 'Pablo' : `example_${p}`,
-        })),
-      }
-    } else if (parameterFormat === 'positional') {
-      if (templateType === 'call_permission_request') {
-        return NextResponse.json(
-          {
-            error:
-              'Call permission request templates require named parameters (e.g. {{first_name}}), not positional {{1}}.',
-          },
-          { status: 400 }
-        )
-      }
-      bodyComponent.example = {
-        body_text: [
-          positionalParams.map((idx) =>
-            idx === 1 ? 'Pablo' : `example_${idx}`
-          ),
-        ],
-      }
-    }
-
-    const components: Array<
-      | { type: 'header'; format: 'TEXT'; text: string }
-      | { type: 'body'; text: string; example?: typeof bodyComponent.example }
-      | { type: 'footer'; text: string }
-      | { type: 'call_permission_request' }
-    > = []
-
-    if (templateType === 'standard' && headerType === 'text' && headerContent) {
-      components.push({ type: 'header', format: 'TEXT', text: headerContent })
-    }
-
-    components.push({
-      type: 'body',
-      text: bodyComponent.text,
-      ...(bodyComponent.example ? { example: bodyComponent.example } : {}),
-    })
-
-    if (templateType === 'call_permission_request') {
-      components.push({ type: 'call_permission_request' })
-    }
-
-    if (templateType === 'standard' && footerText) {
-      components.push({ type: 'footer', text: footerText })
-    }
-
-    const payload: {
-      name: string
-      category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
-      language: string
-      parameter_format?: ParameterFormat
-      components: typeof components
-    } = {
+    const payload = {
       name,
-      category: toMetaCategory(body.category),
+      category: metaCategory,
       language,
       components,
-    }
-    if (templateType === 'call_permission_request') {
-      payload.parameter_format = 'named'
-    } else if (parameterFormat) {
-      payload.parameter_format = parameterFormat
     }
 
     const metaRes = await fetch(
@@ -285,33 +269,43 @@ export async function POST(request: Request) {
       }
     )
 
+    const metaRaw = await metaRes.text()
+    let metaJson: {
+      id?: string
+      status?: string
+      error?: { message?: string; error_user_msg?: string }
+    } = {}
+    try {
+      metaJson = metaRaw ? JSON.parse(metaRaw) : {}
+    } catch {
+      return NextResponse.json(
+        {
+          error: `Meta respondió sin JSON (HTTP ${metaRes.status}). Revisa el token y permisos de plantillas.`,
+        },
+        { status: 502 }
+      )
+    }
+
     if (!metaRes.ok) {
-      let message = `Meta API error: ${metaRes.status}`
-      try {
-        const err = await metaRes.json()
-        if (err?.error?.message) message = err.error.message
-      } catch {
-        // no-op
-      }
+      const message =
+        metaJson.error?.error_user_msg ||
+        metaJson.error?.message ||
+        `Error de Meta (HTTP ${metaRes.status})`
       return NextResponse.json({ error: message }, { status: 502 })
     }
 
-    const metaBody = (await metaRes.json()) as {
-      id?: string
-      status?: string
-      category?: string
-      name?: string
-      language?: string
-    }
-
-    const status = normalizeStatus(metaBody.status || 'PENDING')
+    const status = normalizeStatus(metaJson.status || 'PENDING')
+    const storedBody =
+      metaCategory === 'AUTHENTICATION'
+        ? 'Código de verificación (OTP)'
+        : bodyText
 
     const row = {
       user_id: user.id,
       name,
-      category: body.category || 'Marketing',
+      category,
       language,
-      body_text: bodyText,
+      body_text: storedBody,
       header_type: headerType,
       header_content: headerType === 'text' ? headerContent : null,
       footer_text: footerText,
@@ -351,17 +345,20 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       template: {
-        id: metaBody.id || null,
+        id: metaJson.id || null,
         name,
         language,
         status,
       },
     })
   } catch (error) {
+    console.error('Create template error:', error)
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : 'Failed to create template',
+          error instanceof Error
+            ? error.message
+            : 'No se pudo crear la plantilla',
       },
       { status: 500 }
     )
